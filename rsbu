@@ -1,0 +1,752 @@
+#!/bin/bash
+#
+################################################################################
+#                                  rsbu                                        #
+#                                                                              #
+# This script is used to create a backup using rsync and creating a series of  #
+# directories, one for each daily backup. It uses the link capability of rsync #
+# to minimize the use of disk space.                                           #
+#                                                                              #
+# This program can check to ensure that the defined mountpoint is mounted and  #
+# will mount it if it is not. It does not unmount the device. It also can be   #
+# used to backup remote hosts so long as SSH Public/Private keypairs are in    #
+# place.                                                                       #
+#                                                                              #
+#                                                                              #
+# External modules used                                                        #
+#                                                                              #
+# Change History                                                               #
+# 09/29/2009  David Both    Start work on new code.                            #
+# 12/07/2009  David Both    Rewrite to use external config file and deal with  #
+#                           multiple hosts.                                    #
+# 04/17/2010  David Both    Fix backup path error in check loop. Add code to   #
+#                           ensure that backup device is mounted and mount it  #
+#                           if it is not.                                      #
+# 03/23/2014  David Both    Add code to deal with multiple backup devices and  #
+#                           listing those devices as well as to provide a list #
+#                           of the systems to be backed up. Also added the     #
+#                           -u option to unmount the backup device when the    #
+#                           specified task is finished.                        #
+# 03/29/2014  David Both    Revised code to determine "BackupDate" and         #
+#                           "YesterdaysDate" only once in order to prevent     #
+#                           issues when backups extend past midnight. These    #
+#                           are two new variables whose values are set during  #
+#                           the initialization of the program. This prevents   #
+#                           directory name issues when backups extend past     #
+#                           midnight.                                          #
+#                           Added test mode to perform all functions except    #
+#                           backups. Does not create backup directories.       #
+#                           Variable cleanup. Removed unused variables and     #
+#                           renamed some other variables for better            #
+#                           readability and consistency.                       #
+# 04/10/2014  David Both    Moved mount command for the target backup storage  #
+#                           to inside the if-then structures so that the mount #
+#                           only occurs if required and not for things like    #
+#                           listing the target backup devices.                 #
+# 04/14/2014  David Both    Changed $ThisHost to split off the domain name and #
+#                           leave only the hostname. This matches up with the  #
+#                           data in rsbu.conf.                                 #
+# 06/21/2014  David Both    Added logic code to ping hosts to determine if     #
+#                           they are communicating on the network and skip     #
+#                           backup if they are not.                            #
+# 12/07/2014  David Both    Added a procedure to locate the most recent        #
+#                           backup in the target host directory based on the   #
+#                           YYYY-MM-DD... directory naming conventions. This   #
+#                           prevents making completely new backup when one or  #
+#                           more days are skipped.                             #
+# 01/10/2015  David Both    Added df commands at beginning and end of backup   #
+#                           to show backup data size.                          #
+# 01/11/2015  David Both    Added PartUsage procedure to display disk          #
+#                           usage of the backup partition.                     #
+# 03/16/2015  David Both    Added command to PartUsage procedure to display    #
+#                           status of the mount point to verify rw status.     #
+# 04/20/2015  David Both    Add code to do only a single backup with no daily  #
+#                           directories when using a 1 day retention.          #
+# 05/11/2015  David Both    Added -f option to specify a different             #
+#                           configuration file.                                #
+# 10/17/2015  David Both    Added timestamp to $TodaysBackupPath.              #
+# 08/16/2016  David Both    Adjust logic to allow -u option only so that the   #
+#                           program can be used to simply unmount the backup   #
+#                           device.                                            #
+#                                                                              #
+#                                                                              #
+#                                                                              #
+#                                                                              #
+#                                                                              #
+################################################################################
+################################################################################
+################################################################################
+# Functions MUST go here                                                       #
+################################################################################
+################################################################################
+
+################################################################################
+# Help                                                                         #
+################################################################################
+help()
+{
+   # Display help
+   echo "rsbu - Performs backups of local and remote hosts using rsync."
+   echo "It also uses the link capability of rsync to minimize storage usage"
+   echo "for unmodified files for series of daily backups."
+   echo
+   echo "Syntax: rsbu -[l|L|c|b|h|u]vd <Device number> f <file name>"
+   echo "options:"
+   echo "b     Backup data to the selected Backup Media."
+   echo "c     Check the contents of the Backup Media."
+   echo "d     The number of the backup device. Use -l to list devices by number."
+   echo "f     Specify the name of an alternate configuration file."
+   echo "h     Print this help."
+   echo "l     List the backup devices and their respective numbers."
+   echo "L     List the hosts to be backed up and their respective numbers."
+   echo "t     Test mode. Performs all functions except the actual backups. Does"
+   echo "        NOT create backup directories."
+   echo "u     Verbose mode."
+   echo "v     Verbose mode."
+   echo "V     Print version number and exit."
+   echo
+   echo
+   echo "The configuration file is /usr/local/etc/rsbu.conf. Make all configuration"
+   echo "changes in that file."
+   echo
+   echo "Setting a 1 day retention in this file creates a single"
+   echo "backup of each host without dates. Additional backups simply update the"
+   echo "existing set of backup files and do not create a backup hiistory."
+   echo
+}
+
+################################################################################
+# Quit nicely with messages as appropriate                                     #
+################################################################################
+Quit()
+{
+   if [ $verbose = 1 ]
+      then
+      if [ $error = 0 ]
+         then
+         echo "Program terminated normally"
+      else
+         echo "Program terminated with error $error";
+      fi
+   fi
+   exit
+}
+
+################################################################################
+# Gets simple (Y)es (N)o (Q)uit response from user. Loops until                #
+# one of those responses is detected.                                          #
+################################################################################
+ynq()
+{
+   # loop until we get a good answer and break out
+   while [ $OK = 0 ]
+   do
+      # Print the message
+      echo -n "$message (ynq) "
+      # Now get some input
+      read input
+      # Test the input
+      if [ $input = "yes" ] || [ $input = "y" ]
+         then
+         response="y"
+         OK=1
+      elif [ $input = "no" ] || [ $input = "n" ]
+         then
+         response="n"
+         OK=1
+      elif [ $input = "help" ] || [ $input = "h" ]
+         then
+         help
+      elif [ $input = "q" ] || [ $input = "quit" ]
+         then
+         Quit
+      else
+         # Invalid input
+         echo "INPUT ERROR: Must be y or n or q in lowercase. Please try again."
+      fi
+   done
+}
+
+################################################################################
+# MyMount the Backup Media                                                     #
+################################################################################
+MyMount()
+{
+   ################################################################################
+   # Check mtab to see if the media is already mounted                            #
+   ################################################################################
+   if [ $verbose = 1 ]
+   then
+      echo "Checking to ensure that Backup media is mounted at $MountPoint"
+   fi
+   if grep $MountPoint /etc/mtab > /dev/null
+   then
+      if [ $verbose = 1 ]
+      then
+         echo "Media is already mounted on $MountPoint - not remounting."
+      fi
+   else
+      ################################################################################
+      # MyMount the Backup Media                                                     #
+      ################################################################################
+      if [ $verbose = 1 ]
+      then
+         echo "$MountPoint not mounted. Mounting..."
+      fi
+      mount $MountPoint
+      # preserve the return code from the mount command
+      RC=$?
+      # Check the return code
+      if [ $RC = 0 ]
+      then
+         if [ $verbose = 1 ]
+         then
+            echo "Media mounted OK"
+         fi
+      elif [ $RC = 32 ]
+         then
+         echo "ERROR: MyMount Failure. RC = $RC."
+         echo "Program terminated"
+         exit
+      else
+         echo "ERROR. Program Terminated. RC = $RC"
+         exit
+      fi
+   fi
+}
+
+################################################################################
+# MyUnmount Backup Media                                                       #
+################################################################################
+MyUnmount()
+{
+   cd
+   # Check mtab to see if the media is mounted
+   while grep $MountPoint /etc/mtab
+   do
+      echo "Unmounting $MountPoint"
+      if ! umount $MountPoint
+      then
+         echo "Error ummounting media from $MountPoint. Program terminated with media still mounted. Cannot Eject."
+      fi
+   done
+}
+
+################################################################################
+# List the backup devices so we can figure out if we want to use one other     #
+# than the default.                                                            #
+################################################################################
+List()
+{
+   count=0
+   for I in "${DeviceName[@]}"
+   do
+      if [ $count -gt 0 ]
+      then
+         echo "Device $count = $I"
+      fi
+      count=$((count+1))
+   done
+}
+
+################################################################################
+# List the host systems so we can figure out if we want to use one other       #
+# than the default.                                                            #
+################################################################################
+ListHost()
+{
+   count=1
+   for I in "${Backup[@]}"
+   do
+      if [ $count -gt 0 ]
+      then
+         echo "Host $count = $I"
+      fi
+      count=$((count+1))
+   done
+}
+
+################################################################################
+# This procedure locates the most recent backup directory. This will make it   #
+# easier to deal with backup days that were missed for some reason. This can   #
+# be accomplished easily because of the directory name format YYYY-MM-DD-...   #
+################################################################################
+FindLast()
+{
+   # Be sure to start with null
+   LastBU=""
+   # Change to backup directory for current host
+   cd $BackupPath
+   LastBU=`ls | sort | tail -1`
+   # OK get back to wherever we were
+   cd -
+}
+
+################################################################################
+# This procedure prints the disk partition usage for the given mount point     #
+# in both Human readable form and KB.                                          #
+################################################################################
+PartUsage()
+{
+   echo "##############################################################################"
+   echo "#                  Backup partition space usage data                         #"
+   echo "##############################################################################"
+   df -h $MountPoint
+   df -k $MountPoint
+   # now let's look at the mount status
+   mount | grep $MountPoint
+   echo "##############################################################################"
+}
+
+
+
+################################################################################
+################################################################################
+# Main program                                                                 #
+################################################################################
+################################################################################
+# Unset arrays to ensure no leftovers from previous runs
+unset DeviceName
+unset BackupDevice
+unset MountPoint
+unset Age
+################################################################################
+# Initialization                                                               #
+################################################################################
+# Set initial variables
+backup=0
+BackupDate=""
+BackupPath=""
+badoption=0
+check=0
+ConfigFile="/usr/local/etc/rsbu.conf"
+device=1
+Directories=""
+error=0
+Excludes=""
+HostName=""
+LastBackupPath=""
+LastBU=""
+list=0
+ListHosts=0
+MountPoint=""
+nooption=1
+OK=0
+TestMode=0
+ThisHost=`hostname | awk -F. '{print $1}'`
+TimeStamp="TimeStamp"
+unmount=0
+verbose=0
+version=2.3.7
+
+################################################################################
+# Process the input options                                                    #
+################################################################################
+# Get the options
+while getopts ":bchtvulLVd:f:" option; do
+   case $option in
+      b) # Perform the backup to the Backup Media
+         nooption=0
+         backup=1
+         ;;
+      c) # Check the Backup Media contents
+         nooption=0
+         check=1
+         ;;
+      d) # The index of the device to use
+         nooption=0
+         # Device number
+         device=$OPTARG
+         ;;
+      f) # Specify a different config file
+         nooption=0
+         ConfigFile=$OPTARG
+         ;;
+      h) # display help
+         nooption=0
+         help
+         Quit
+         ;;
+      l) # List the backup devices and their numbers
+         nooption=0
+         list=1
+         ;;
+      L) # List the host systems and their numbers
+         nooption=0
+         ListHosts=1
+         ;;
+      t) # Test mode
+         nooption=0
+         TestMode=1
+         ;;
+      u) # Unmount parameter
+         nooption=0
+         unmount=1
+         ;;
+      v) # Set verbose mode
+         nooption=0
+         verbose=1
+         ;;
+      V) # Print Version number
+         echo "rsbu Version $version"
+         Quit
+         ;;
+     \?) # incorrect option
+         nooption=0
+         badoption=1
+         ;;
+   esac
+done
+
+if [ $nooption = 1 ]
+   then
+   echo "ERROR: No option entered. You must enter at least one valid option."
+   help
+   verbose=1
+   error="ID10T"
+   Quit
+fi
+
+if [ $badoption = 1 ]
+then
+   echo "ERROR: Invalid option"
+   help
+   verbose=1
+   error="ID10T"
+   Quit
+fi
+
+# Source the configuration file to set certain user configurable variables
+source $ConfigFile
+
+if [ ! $device ]
+   then
+   device=1
+fi
+
+
+################################################################################
+# Set up the device information from the supplied device index                 #
+################################################################################
+Age=${Age[$device]}
+BasePath=${BasePath[$device]}
+DeviceName=${DeviceName[$device]}
+MountPoint=${MountPoint[$device]}
+BackupDate=`date +%Y-%m-%d`
+YesterdaysDate=`date -d "now-1days" "+%Y-%m-%d"`
+
+################################################################################
+# Do a little debug output                                                     #
+################################################################################
+if [ $verbose = 1 ]
+then
+   echo
+   echo "##############################################################################"
+   echo "# This Host = $ThisHost"
+   echo "# rsbu Version = $version"
+   echo "# Config file = $ConfigFile"
+   echo "# Device index = $device"
+   echo "# Device Name = $DeviceName"
+   echo "# Mount Point = $MountPoint"
+   echo "# Maximum age of retained files = $Age"
+   echo "# Base path = $BasePath"
+   echo "# StartDate = $BackupDate"
+   echo "# YesterdaysDate = $YesterdaysDate"
+   echo "##############################################################################"
+   echo
+fi
+
+if [ $list = 1 ]
+then
+   ################################################################################
+   # Display the list of backup devices that can be used.                         #
+   ################################################################################
+   List
+   Quit
+elif [ $ListHosts = 1 ]
+then
+   ################################################################################
+   # List the hosts that are configured for backups                               #
+   ################################################################################
+   ListHost
+   Quit
+elif [ $backup = 1 ]
+then
+   # Ensure that the device is mounted
+   MyMount
+   # Print backup parition usage information in Human and Kb formats
+   PartUsage
+   ################################################################################
+   # Loop through each host and do the backup                                     #
+   ################################################################################
+   # Set the initial loop counter
+   let Count=1
+   while (( $Count < ${#Backup[@]}+1 ))
+   do
+      echo "##############################################################################"
+      # Get a line of data
+      Line=${Backup[$Count]}
+      # Extract the data from the line
+      HostName=$(echo $Line | awk -F \; '{print $1}')
+      Excludes=$(echo $Line | awk -F \; '{print $2}')
+      BackupData=$(echo $Line | awk -F \; '{print $3}')
+      # Is the host on the network and communicating?
+      if ping -c1 $HostName
+      then 
+         ################################################################################
+         # Do the backup - the host is available on the network                         #
+         ################################################################################
+         if [ $verbose = 1 ]
+         then
+            echo "### Starting backup for host $HostName ###"
+            echo "# Config file = $ConfigFile"
+            echo "### Backup spec: $Line ###"
+         fi
+         # Set the base backup path for this host
+         BackupPath="$BasePath/$HostName/"
+         ################################################################################
+         # Delete any backups that are more than "Age" days old.                        #
+         ################################################################################
+         # Delete old backups if the base directory exists
+         if [ -d $BackupPath ] && [ $TestMode = 0 ] && [ $Age -gt 1 ]
+         then 
+            if [ $verbose = 1 ]
+            then
+               echo "Deleting any backups for host $HostName more than $Age days old."
+            fi
+            cd $BackupPath
+            # Check this directory only (no deeper) for backup direcories greater than $Age days old
+            # and delete them
+            find . -maxdepth 1 -type d -name "*RSBackup" -mtime +$Age -exec rm -rf {} \;
+         else
+            if [ $verbose = 1 ]
+            then
+               echo "NOT deleting any backups for host $HostName more than $Age days old."
+            fi
+         fi
+   
+         ################################################################################
+         # Set up paths for today                                                       #
+         ################################################################################
+         if [ $Age -gt 1 ]
+         then
+            echo "Doing a date series backup."
+            # Generate the date string for todays file name including the date
+            TodaysBackupPath="$BackupPath$BackupDate-RSBackup"
+            # Find the last Backup directory, if it exists, for this host
+            FindLast
+            # If $LastBU is not null then use it to create the $LastBackupPath
+            if [ -n $LastBU ]
+            then
+               # Make what is already there the LastBackupPath
+               LastBackupPath=$BackupPath$LastBU
+            else
+               # There are no backup directories extant for this host, so
+               # Generate the path from Yesterday to be the --link-dest= directory
+               LastBackupPath="$BackupPath$YesterdaysDate-RSBackup"
+            fi
+         else
+            echo "Doing a NON-date series backup."
+            # TodaysBackupPath is the same as the $BackupPath
+            TodaysBackupPath="$BackupPath"
+         fi
+         if [ $verbose = 1 ]
+         then
+            echo "Today's backup path is $TodaysBackupPath"
+            if [ $Age -gt 1 ]
+            then
+               echo "The last backup path is $LastBackupPath"
+            fi
+         fi
+          
+         # Create today's directory creating the parents if necessary
+         if [ $TestMode = 0 ] 
+         then
+            mkdir -p $TodaysBackupPath
+         fi
+
+
+         ################################################################################
+         # Timestamp the directory $TodaysBackupPath                                    #
+         ################################################################################
+         touch $TodaysBackupPath/$TimeStamp
+   
+         ################################################################################
+         # Do the backup with the hardlinks to yesterday if there was one.              #
+         ################################################################################
+         # Check for existence of previous directory
+         if [ -d $LastBackupPath ] && [ $Age -gt 1 ]
+         then
+            if [ $verbose = 1 ]
+            then
+               echo "Performing backup for $TodaysBackupPath with link to $LastBackupPath"
+            fi
+            # Do the backup and delete files that don't exist on the source side, i.e., were deleted.
+            # determine if the host is local or remote
+            if [ $ThisHost = $HostName ]
+            then
+               if [ $verbose = 1 ]
+               then
+                  echo "Backing up the local host."
+               fi
+               if [ $TestMode = 0 ]
+               then 
+                  if [ $verbose = 1 ]
+                  then
+                     echo "Not test mode. We ARE performing the backup."
+                  fi
+                  rsync -aH --delete --link-dest=$LastBackupPath $Excludes $HostName$BackupData $TodaysBackupPath
+               else 
+                  if [ $verbose = 1 ]
+                  then
+                     echo "Test mode only. Not performing backup."
+                  fi
+               fi
+            else
+               if [ $verbose = 1 ]
+               then
+                  echo "Backing up a remote host."
+               fi
+               if [ $TestMode = 0 ]
+               then 
+                  if [ $verbose = 1 ]
+                  then
+                     echo "Not test mode. We ARE performing the backup."
+                     rsync -aH -e ssh --delete --link-dest=$LastBackupPath $Excludes $HostName$BackupData $TodaysBackupPath
+                  fi
+               else 
+                  if [ $verbose = 1 ]
+                  then
+                     echo "Test mode only. Not performing backup."
+                  fi
+               fi
+            fi
+         else
+            if [ $verbose = 1 ]
+            then
+               echo "Performing backup for $TodaysBackupPath with no link to previous backup because it does not exist."
+            fi
+            # Do the backup without a link to yesterday.
+            # determine if the host is local or remote
+            if [ $ThisHost = $HostName ]
+            then
+               if [ $verbose = 1 ]
+               then
+                  echo "Backing up the local host."
+               fi
+               if [ $TestMode = 0 ]
+               then 
+                  if [ $verbose = 1 ]
+                  then
+                     echo "Not test mode. We ARE performing the backup."
+                     rsync -aH --delete $Excludes $HostName$BackupData $TodaysBackupPath
+                  fi
+               else 
+                  if [ $verbose = 1 ]
+                  then
+                     echo "Test mode only. Not performing backup."
+                  fi
+               fi
+   
+            else
+               if [ $verbose = 1 ]
+               then
+                  echo "Backing up a remote host."
+               fi
+               if [ $TestMode = 0 ]
+               then 
+                  if [ $verbose = 1 ]
+                  then
+                     echo "Not test mode. We ARE performing the backup."
+                     rsync -aH -e ssh --delete $Excludes $HostName$BackupData $TodaysBackupPath
+                  fi
+               else 
+                  if [ $verbose = 1 ]
+                  then
+                     echo "Test mode only. Not performing backup."
+                  fi
+               fi
+            fi
+         fi 
+      else 
+         ################################################################################
+         # Don't do the backup because the host is not available on the network         #
+         ################################################################################
+         if [ $verbose = 1 ]
+         then
+            echo "### Host $HostName is NOT available ###"
+         fi
+      fi
+      
+      # Increment the counter so we can do the next line
+      let Count=$Count+1
+   done
+   echo "##############################################################################"
+elif [ $check = 1 ]
+then
+   # Ensure that the device is mounted
+   MyMount
+   echo "##############################################################################"
+   # Set the initial loop counter
+   let Count=1
+   while (( $Count < ${#Backup[@]}+1 ))
+      do
+      # Get a line of data
+      Line=${Backup[$Count]}
+      # Extract the data from the line
+      HostName=$(echo $Line | awk -F \; '{print $1}')
+      # Set the base backup path
+      BackupPath="$BasePath/$HostName/"
+      # list the contents of the base backup directory if it exists
+      if [ -d $BackupPath ]
+      then
+         echo "Contents of $BackupPath for $HostName"
+         ls -l $BackupPath
+      else
+         echo "The directory $BackupPath for $HostName does not exist"
+      fi
+      echo "##############################################################################"
+
+      # Increment the counter so we can do the next line
+      let Count=$Count+1
+   done
+else
+   if [[ $unmount = 1 ]]
+   then
+      sync;sync
+      # MyUnmount the drive and quit
+      MyUnmount
+      Quit
+   else
+      # How did we get here?
+      echo "ERROR: No valid option entered. You must enter at least one valid option."
+      help
+      verbose=1
+      error="ID10T"
+      Quit
+   fi
+fi
+# Sync file systems
+sync;sync
+# Print backup parition usage information in Human and Kb formats
+PartUsage
+
+################################################################################
+# Check for Unmount flag and unmount if option specified.                      #
+################################################################################
+if [ $unmount = 1 ]
+then
+   # MyUnmount the drive and quit
+   MyUnmount
+fi
+
+Quit
+
+################################################################################
+################################################################################
+################################################################################
+exit
+################################################################################
+################################################################################
+################################################################################
+################################################################################
