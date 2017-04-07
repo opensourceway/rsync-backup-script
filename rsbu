@@ -612,8 +612,8 @@ then
                   if [ $verbose = 1 ]
                   then
                      echo "Not test mode. We ARE performing the backup."
-                     rsync -aH -e ssh --delete --link-dest=$LastBackupPath $Excludes $HostName$BackupData $TodaysBackupPath
                   fi
+                  rsync -aH -e ssh --delete --link-dest=$LastBackupPath $Excludes $HostName$BackupData $TodaysBackupPath
                else 
                   if [ $verbose = 1 ]
                   then
