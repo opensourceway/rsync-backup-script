@@ -101,7 +101,7 @@ help()
    echo "L     List the hosts to be backed up and their respective numbers."
    echo "t     Test mode. Performs all functions except the actual backups. Does"
    echo "        NOT create backup directories."
-   echo "u     Verbose mode."
+   echo "u     Unmount Backup Media."
    echo "v     Verbose mode."
    echo "V     Print version number and exit."
    echo
@@ -111,7 +111,7 @@ help()
    echo
    echo "Setting a 1 day retention in this file creates a single"
    echo "backup of each host without dates. Additional backups simply update the"
-   echo "existing set of backup files and do not create a backup hiistory."
+   echo "existing set of backup files and do not create a backup history."
    echo
 }
 
@@ -492,7 +492,7 @@ then
       BackupData=$(echo $Line | awk -F \; '{print $3}')
       # Is the host on the network and communicating?
       if ping -c1 $HostName
-      then 
+      then
          ################################################################################
          # Do the backup - the host is available on the network                         #
          ################################################################################
@@ -509,7 +509,7 @@ then
          ################################################################################
          # Delete old backups if the base directory exists
          if [ -d $BackupPath ] && [ $TestMode = 0 ] && [ $Age -gt 1 ]
-         then 
+         then
             if [ $verbose = 1 ]
             then
                echo "Deleting any backups for host $HostName more than $Age days old."
@@ -524,7 +524,7 @@ then
                echo "NOT deleting any backups for host $HostName more than $Age days old."
             fi
          fi
-   
+
          ################################################################################
          # Set up paths for today                                                       #
          ################################################################################
@@ -558,9 +558,9 @@ then
                echo "The last backup path is $LastBackupPath"
             fi
          fi
-          
+
          # Create today's directory creating the parents if necessary
-         if [ $TestMode = 0 ] 
+         if [ $TestMode = 0 ]
          then
             mkdir -p $TodaysBackupPath
          fi
@@ -570,7 +570,7 @@ then
          # Timestamp the directory $TodaysBackupPath                                    #
          ################################################################################
          touch $TodaysBackupPath/$TimeStamp
-   
+
          ################################################################################
          # Do the backup with the hardlinks to yesterday if there was one.              #
          ################################################################################
@@ -590,13 +590,13 @@ then
                   echo "Backing up the local host."
                fi
                if [ $TestMode = 0 ]
-               then 
+               then
                   if [ $verbose = 1 ]
                   then
                      echo "Not test mode. We ARE performing the backup."
                   fi
                   rsync -aH --delete --link-dest=$LastBackupPath $Excludes $HostName$BackupData $TodaysBackupPath
-               else 
+               else
                   if [ $verbose = 1 ]
                   then
                      echo "Test mode only. Not performing backup."
@@ -608,13 +608,13 @@ then
                   echo "Backing up a remote host."
                fi
                if [ $TestMode = 0 ]
-               then 
+               then
                   if [ $verbose = 1 ]
                   then
                      echo "Not test mode. We ARE performing the backup."
-                     rsync -aH -e ssh --delete --link-dest=$LastBackupPath $Excludes $HostName$BackupData $TodaysBackupPath
                   fi
-               else 
+                  rsync -aH -e ssh --delete --link-dest=$LastBackupPath $Excludes $HostName$BackupData $TodaysBackupPath
+               else
                   if [ $verbose = 1 ]
                   then
                      echo "Test mode only. Not performing backup."
@@ -635,40 +635,39 @@ then
                   echo "Backing up the local host."
                fi
                if [ $TestMode = 0 ]
-               then 
+               then
                   if [ $verbose = 1 ]
                   then
                      echo "Not test mode. We ARE performing the backup."
-                     rsync -aH --delete $Excludes $HostName$BackupData $TodaysBackupPath
                   fi
-               else 
+                  rsync -aH --delete $Excludes $HostName$BackupData $TodaysBackupPath
+               else
                   if [ $verbose = 1 ]
                   then
                      echo "Test mode only. Not performing backup."
                   fi
                fi
-   
             else
                if [ $verbose = 1 ]
                then
                   echo "Backing up a remote host."
                fi
                if [ $TestMode = 0 ]
-               then 
+               then
                   if [ $verbose = 1 ]
                   then
                      echo "Not test mode. We ARE performing the backup."
-                     rsync -aH -e ssh --delete $Excludes $HostName$BackupData $TodaysBackupPath
                   fi
-               else 
+                  rsync -aH -e ssh --delete $Excludes $HostName$BackupData $TodaysBackupPath
+               else
                   if [ $verbose = 1 ]
                   then
                      echo "Test mode only. Not performing backup."
                   fi
                fi
             fi
-         fi 
-      else 
+        fi
+      else
          ################################################################################
          # Don't do the backup because the host is not available on the network         #
          ################################################################################
@@ -677,7 +676,6 @@ then
             echo "### Host $HostName is NOT available ###"
          fi
       fi
-      
       # Increment the counter so we can do the next line
       let Count=$Count+1
    done
