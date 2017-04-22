@@ -228,6 +228,8 @@ MyUnmount()
       if ! umount $MountPoint
       then
          echo "Error ummounting media from $MountPoint. Program terminated with media still mounted. Cannot Eject."
+         # I think it should exit with an error status now otherwise it will enter the dead loop.
+         exit 1
       fi
    done
 }
