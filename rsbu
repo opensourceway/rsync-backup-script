@@ -597,7 +597,7 @@ then
                   then
                      echo "Not test mode. We ARE performing the backup."
                   fi
-                  rsync -aH --delete --link-dest=$LastBackupPath $Excludes $HostName$BackupData $TodaysBackupPath
+                  rsync -aH --delete --link-dest=$LastBackupPath $Excludes $BackupData $TodaysBackupPath
                else
                   if [ $verbose = 1 ]
                   then
@@ -642,7 +642,7 @@ then
                   then
                      echo "Not test mode. We ARE performing the backup."
                   fi
-                  rsync -aH --delete $Excludes $HostName$BackupData $TodaysBackupPath
+                  rsync -aH --delete $Excludes $BackupData $TodaysBackupPath
                else
                   if [ $verbose = 1 ]
                   then
